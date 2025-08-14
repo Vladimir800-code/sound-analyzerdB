@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Анализатор звука (дБ SPL)</title>
+<style>
+  :root { --blue:#2563eb; --blue-dark:#1e40af; --grid:#e5e7eb; --text:#111827; --muted:#6b7280; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: Arial, sans-serif;
+    color: var(--text);
+    background: linear-gradient(to bottom, #f0f4f8, #dbeafe);
+    margin: 0; padding: 0; text-align: center;
+  }
+  header { padding: 18px 12px 6px; }
+  h1 { margin: 0 0 8px; color:#1e3a8a; font-size: 22px; }
+  .controls { margin: 8px 0 4px; display:flex; gap:8px; justify-content:center; flex-wrap: wrap; }
+  button {
+    padding: 10px 16px; font-size: 15px; border: none; border-radius: 10px;
+    background: var(--blue); color:#fff; cursor:pointer; transition: background .25s ease, transform .05s ease;
+  }
+  button:hover { background: var(--blue-dark); }
+  button:active { transform: translateY(1px); }
+  button:disabled { background:#94a3b8; cursor: not-allowed; }
+  #status { min-height: 22px; font-weight: 600; margin: 8px 0 0; color:#0f172a; }
+  #status.error { color:#b91c1c; }
+  #status.ok { color:#065f46; }
+  main { padding: 10px 12px 30px; }
+  canvas {
+    display:block; margin: 12px auto 0; background:#fff; border:1px solid #000;
+    max-width: 95vw; height:auto;
+  }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Анализ интенсивности звука (дБ SPL)</h1>
+  <div class="controls">
+    <button id="calibrateBtn">📏 Калибровка</button>
+    <button id="startBtn">🎙 Начать запись (10 с)</button>
+    <button id="resetCalBtn" title="Удалить сохранённую калибровку">♻️ Сброс калибровки</button>
+  </div>
+  <div id="status" aria-live="polite"></div>
+  <div class="hint">Сначала выполните «Калибровка». Ваша калибровка сохраняется в браузере (localStorage).</div>
+</header>
+<main>
+  <canvas id="graph" width="900" height="420"></canvas>
+</main>
+
+<script>
+(() => {
+  const startBtn = document.getElementById('startBtn');
+  const calibrateBtn = document.getElementById('calibrateBtn');
+  const resetCalBtn = document.getElementById('resetCalBtn');
+  const status = document.getElementById('status');
+  const canvas = document.getElementById('graph');
+  const ctx = canvas.getContext('2d');
+
+  const DURATION = 10;       // секунд записи
+  const CHUNK_SIZE = 1024;   // окно для RMS
+  let audioData = [];
+
+  let audioContext = null;
+  let sourceNode = null;
+  let scriptProcessor = null;
+  let currentStream = null;
+  let recordTimer = null;
+  let isRecording = false;
+
+  let K = parseFloat(localStorage.getItem('calibrationK') || 'NaN');
+  if (isFinite(K) && K > 0) {
+    setStatus('Найдена сохранённая калибровка.', 'ok');
+  } else {
+    K = NaN;
+    setStatus('Сначала выполните «Калибровка».', '');
+  }
+
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+    setStatus('⚠ Запустите через HTTPS или GitHub Pages для работы с микрофоном.', 'error');
+    startBtn.disabled = true;
+    calibrateBtn.disabled = true;
+  }
+
+  function setStatus(text, cls='') {
+    status.className = cls ? cls : '';
+    status.textContent = text;
+  }
+
+  function setButtonsDisabled(disabled) {
+    startBtn.disabled = disabled;
+    calibrateBtn.disabled = disabled;
+    resetCalBtn.disabled = disabled && !isFinite(K);
+  }
+
+  function getRMS(arr) {
+    if (!arr || arr.length === 0) return 0;
+    let s = 0;
+    for (let i = 0; i < arr.length; i++) s += arr[i] * arr[i];
+    return Math.sqrt(s / arr.length);
+  }
+
+  async function recordAudio(seconds, onDone) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus('❌ Ваш браузер не поддерживает работу с микрофоном.', 'error');
+      return;
+    }
+    if (isRecording) await stopRecording();
+
+    try {
+      setStatus('🔍 Запрос доступа к микрофону...');
+      audioData = [];
+      isRecording = true;
+      setButtonsDisabled(true);
+
+      currentStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      await audioContext.resume();
+
+      sourceNode = audioContext.createMediaStreamSource(currentStream);
+      scriptProcessor = audioContext.createScriptProcessor(CHUNK_SIZE, 1, 1);
+      scriptProcessor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0);
+        audioData.push(...input);
+      };
+
+      sourceNode.connect(scriptProcessor);
+      scriptProcessor.connect(audioContext.destination);
+
+      setStatus('🎤 Идёт запись...');
+
+      recordTimer = setTimeout(async () => {
+        await stopRecording();
+        if (typeof onDone === 'function') onDone();
+      }, Math.max(0, seconds * 1000));
+
+    } catch (err) {
+      console.error(err);
+      setStatus('Ошибка доступа к микрофону: ' + (err && err.message ? err.message : err), 'error');
+      await stopRecording();
+    }
+  }
+
+  async function stopRecording() {
+    if (!isRecording) return;
+    isRecording = false;
+    try {
+      if (recordTimer) { clearTimeout(recordTimer); recordTimer = null; }
+      if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor.onaudioprocess = null; }
+      if (sourceNode) { sourceNode.disconnect(); }
+      if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+      if (audioContext) await audioContext.close();
+    } catch (e) {
+      console.warn('Ошибка при остановке записи:', e);
+    } finally {
+      scriptProcessor = null;
+      sourceNode = null;
+      currentStream = null;
+      audioContext = null;
+      setButtonsDisabled(false);
+      setStatus('Запись остановлена.');
+    }
+  }
+
+  calibrateBtn.addEventListener('click', async () => {
+    alert('Скажите что-то вслух или хлопните в ладоши на расстоянии ~30 см от микрофона.\nКалибровка длится 3 секунды.');
+    await recordAudio(3, () => {
+      const rms = getRMS(audioData);
+      if (!rms || rms <= 1e-6) {
+        setStatus('⚠ Очень низкий сигнал во время калибровки. Повторите.', 'error');
+        return;
+      }
+      const L_ref = 65;
+      const P_ref = 20e-6 * Math.pow(10, L_ref / 20);
+      K = P_ref / rms;
+      localStorage.setItem('calibrationK', String(K));
+      setStatus(`✅ Калибровка завершена. K = ${K.toExponential(3)} Па/ед.`, 'ok');
+    });
+  });
+
+  resetCalBtn.addEventListener('click', () => {
+    localStorage.removeItem('calibrationK');
+    K = NaN;
+    setStatus('Калибровка сброшена. Выполните «Калибровка» перед измерением.', '');
+  });
+
+  startBtn.addEventListener('click', async () => {
+    if (!isFinite(K) || K <= 0) {
+      alert('Сначала выполните калибровку.');
+      return;
+    }
+    await recordAudio(DURATION, processAudio);
+  });
+
+  function processAudio() {
+    if (!audioData || audioData.length === 0) {
+      setStatus('❌ Звук не записан.', 'error');
+      return;
+    }
+    const dbValues = [];
+    for (let i = 0; i < audioData.length; i += CHUNK_SIZE) {
+      const chunk = audioData.slice(i, i + CHUNK_SIZE);
+      const rms = getRMS(chunk);
+      const P = Math.max(rms * K, 1e-12);
+      const dB = 20 * Math.log10(P / 20e-6);
+      dbValues.push(dB);
+    }
+    drawGraph(dbValues);
+    setStatus('✅ График построен!', 'ok');
+  }
+
+  function drawGraph(dbValues) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    let maxDb = Math.max(...dbValues);
+    let minDb = Math.min(...dbValues);
+    if (!isFinite(maxDb) || !isFinite(minDb)) { maxDb = -20; minDb = -80; }
+    const padding = 5;
+    maxDb = Math.ceil((maxDb + padding) / 5) * 5;
+    minDb = Math.floor((minDb - padding) / 5) * 5;
+    if (maxDb - minDb < 20) {
+      const mid = (maxDb + minDb) / 2;
+      maxDb = mid + 10; minDb = mid - 10;
+    }
+
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--grid') || '#e5e7eb';
+    ctx.lineWidth = 1;
+    ctx.font = '12px Arial';
+    ctx.fillStyle = '#555';
+    for (let db = Math.ceil(minDb/10)*10; db <= maxDb; db += 10) {
+      const y = mapDbToY(db, minDb, maxDb);
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      ctx.fillText(db + ' дБ', 6, y - 2);
+    }
+
+    const N = dbValues.length;
+    for (let t = 0; t <= DURATION; t++) {
+      const x = (t / DURATION) * canvas.width;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      ctx.fillText(t + ' с', x + 3, canvas.height - 6);
+    }
+
+    ctx.beginPath();
+    const denom = Math.max(1, N - 1);
+    for (let i = 0; i < N; i++) {
+      const x = (i / denom) * canvas.width;
+      const y = mapDbToY(dbValues[i], minDb, maxDb);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--blue') || '#2563eb';
+    ctx.lineWidth = 2; ctx.stroke();
+
+    ctx.strokeStyle = '#000';
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, canvas.height);
+    ctx.moveTo(0, canvas.height); ctx.lineTo(canvas.width, canvas.height); ctx.stroke();
+
+    ctx.font = '14px Arial'; ctx.fillStyle = '#000';
+    ctx.fillText('Время (с)', canvas.width / 2 - 35, canvas.height - 10);
+    ctx.save(); ctx.rotate(-Math.PI / 2);
+    ctx.fillText('Уровень звука (дБ SPL)', -canvas.height / 2 - 55, 15);
+    ctx.restore();
+  }
+
+  function mapDbToY(value, minDb, maxDb) {
+    const frac = (value - minDb) / (maxDb - minDb);
+    return canvas.height - frac * canvas.height;
+  }
+
+  window.addEventListener('beforeunload', () => { if (isRecording) stopRecording(); });
+})();
+</script>
+</body>
+</html>
