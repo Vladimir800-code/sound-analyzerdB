@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Анализатор звука (дБ SPL)</title>
+<title>Анализатор звука (Вт/м²) и расхода воздуха</title>
 <style>
-  :root { --blue:#2563eb; --blue-dark:#1e40af; --grid:#e5e7eb; --text:#111827; --muted:#6b7280; }
+  :root { --blue:#2563eb; --blue-dark:#1e40af; --grid:#e5e7eb; --text:#111827; --muted:#6b7280; --green:#10b981; --green-dark:#059669; --orange:#f97316; --orange-dark:#ea580c; }
   * { box-sizing: border-box; }
   body {
     font-family: Arial, sans-serif;
@@ -43,15 +43,91 @@
     font-size: 14px;
     color: #92400e;
   }
+  .legend {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin-top: 15px;
+    font-size: 14px;
+    background: #f8fafc;
+    border-radius: 8px;
+    padding: 12px;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .legend-row {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .legend-color {
+    width: 20px;
+    height: 3px;
+    display: inline-block;
+  }
+  .signal-info {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed #cbd5e1;
+    width: 100%;
+  }
+  .signal-info-item {
+    display: flex;
+    justify-content: space-between;
+    margin: 4px 0;
+  }
+  .signal-info-label {
+    font-weight: bold;
+    color: var(--muted);
+  }
+  .signal-info-value {
+    font-weight: 600;
+    color: var(--text);
+  }
+  .input-group {
+    margin: 10px 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .input-group label {
+    font-weight: bold;
+    color: var(--muted);
+  }
+  .input-group input {
+    padding: 8px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 14px;
+    width: 120px;
+    text-align: center;
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>Анализ интенсивности звука (дБ SPL)</h1>
+  <h1>Анализ интенсивности звука и расхода воздуха</h1>
   <div class="permission-note">
     ⚠ Для работы приложения необходим доступ к микрофону.<br>
     Разрешите использование микрофона в браузере.
   </div>
+  
+  <div class="input-group">
+    <label for="flowCoefficient">Коэффициент преобразования:</label>
+    <input type="number" id="flowCoefficient" value="10000" min="100" max="20000" step="100">
+    <span>л/с на Вт/м²</span>
+  </div>
+  
   <div class="controls">
     <button id="calibrateBtn">📏 Калибровка</button>
     <button id="startBtn">🎙 Начать запись (10 с)</button>
@@ -62,6 +138,56 @@
 </header>
 <main>
   <canvas id="graph" width="900" height="420"></canvas>
+  <div class="legend">
+    <div class="legend-row">
+      <div class="legend-item">
+        <span class="legend-color" style="background: var(--blue);"></span>
+        <span>Интенсивность звука (Вт/м²)</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-color" style="background: var(--green);"></span>
+        <span>Интегральная энергия (Вт·с/м²)</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-color" style="background: var(--orange);"></span>
+        <span>Интегральный расход воздуха (л)</span>
+      </div>
+    </div>
+    <div class="signal-info" id="signalInfo" style="display: none;">
+      <div class="signal-info-item">
+        <span class="signal-info-label">Начало сигнала:</span>
+        <span class="signal-info-value" id="startTime">-</span>
+      </div>
+      <div class="signal-info-item">
+        <span class="signal-info-label">Конец сигнала:</span>
+        <span class="signal-info-value" id="endTime">-</span>
+      </div>
+      <div class="signal-info-item">
+        <span class="signal-info-label">Длительность сигнала:</span>
+        <span class="signal-info-value" id="duration">-</span>
+      </div>
+      <div class="signal-info-item">
+        <span class="signal-info-label">Средняя интенсивность:</span>
+        <span class="signal-info-value" id="avgIntensity">-</span>
+      </div>
+      <div class="signal-info-item">
+        <span class="signal-info-label">Накопленная энергия:</span>
+        <span class="signal-info-value" id="totalEnergy">-</span>
+      </div>
+      <div class="signal-info-item">
+        <span class="signal-info-label">Макс. расход воздуха:</span>
+        <span class="signal-info-value" id="maxFlowRate">-</span>
+      </div>
+      <div class="signal-info-item">
+        <span class="signal-info-label">Средний расход:</span>
+        <span class="signal-info-value" id="avgFlowRate">-</span>
+      </div>
+      <div class="signal-info-item">
+        <span class="signal-info-label">Общий объем воздуха:</span>
+        <span class="signal-info-value" id="totalVolume">-</span>
+      </div>
+    </div>
+  </div>
 </main>
 
 <script>
@@ -69,16 +195,39 @@
   const startBtn = document.getElementById('startBtn');
   const calibrateBtn = document.getElementById('calibrateBtn');
   const resetCalBtn = document.getElementById('resetCalBtn');
+  const flowCoefficientInput = document.getElementById('flowCoefficient');
   const status = document.getElementById('status');
   const canvas = document.getElementById('graph');
   const ctx = canvas.getContext('2d');
+  
+  // Элементы для отображения информации о сигнале
+  const signalInfo = document.getElementById('signalInfo');
+  const startTimeEl = document.getElementById('startTime');
+  const endTimeEl = document.getElementById('endTime');
+  const durationEl = document.getElementById('duration');
+  const avgIntensityEl = document.getElementById('avgIntensity');
+  const totalEnergyEl = document.getElementById('totalEnergy');
+  const maxFlowRateEl = document.getElementById('maxFlowRate');
+  const avgFlowRateEl = document.getElementById('avgFlowRate');
+  const totalVolumeEl = document.getElementById('totalVolume');
 
   const DURATION = 10;
   const CHUNK_SIZE = 1024;
   const NOISE_RECORD_DURATION = 2;
+  const INTEGRAL_SCALE = 1;
   let audioData = [];
   let noiseProfile = [];
   let noiseRMS = 0;
+  
+  // Переменные для хранения информации о сигнале
+  let signalStartTime = 0;
+  let signalEndTime = 0;
+  let signalDuration = 0;
+  let averageIntensity = 0;
+  let totalEnergyValue = 0;
+  let maxFlowRateValue = 0;
+  let averageFlowRateValue = 0;
+  let totalVolumeValue = 0;
 
   let audioContext = null;
   let sourceNode = null;
@@ -114,48 +263,27 @@
     return Math.sqrt(s / arr.length);
   }
 
-  // Функция для проверки и запроса доступа к микрофону
+  // Функция преобразования интенсивности в расход воздуха
+  function intensityToFlowRate(intensity) {
+    const k = parseFloat(flowCoefficientInput.value) || 10000;
+    return intensity * k; // Y = kX
+  }
+
   async function requestMicrophoneAccess() {
     if (hasMicrophoneAccess) return true;
-    
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setStatus('❌ Ваш браузер не поддерживает работу с микрофоном.', 'error');
       return false;
     }
-
     try {
       setStatus('🔍 Запрос доступа к микрофону...', 'processing');
-      
-      // Пробуем получить доступ к микрофону
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100
-        }
-      });
-      
-      // Немедленно останавливаем поток после проверки доступа
-      stream.getTracks().forEach(track => track.stop());
-      
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      currentStream = stream;
       hasMicrophoneAccess = true;
       setStatus('✅ Доступ к микрофону получен', 'ok');
       return true;
     } catch (error) {
-      console.error('Ошибка доступа к микрофону:', error);
-      let errorMessage = 'Не удалось получить доступ к микрофону. ';
-      
-      if (error.name === 'NotAllowedError') {
-        errorMessage += 'Разрешите доступ к микрофону в настройках браузера.';
-      } else if (error.name === 'NotFoundError') {
-        errorMessage += 'Микрофон не найден.';
-      } else if (error.name === 'NotReadableError') {
-        errorMessage += 'Микрофон уже используется другим приложением.';
-      } else {
-        errorMessage += error.message || 'Неизвестная ошибка.';
-      }
-      
-      setStatus(errorMessage, 'error');
+      setStatus('Ошибка доступа к микрофону: ' + error.message, 'error');
       return false;
     }
   }
@@ -163,33 +291,19 @@
   async function recordNoiseProfile(duration) {
     return new Promise((resolve) => {
       setStatus('🔍 Запись фонового шума...', 'processing');
-      
       const noiseData = [];
       const tempScriptProcessor = audioContext.createScriptProcessor(CHUNK_SIZE, 1, 1);
       tempScriptProcessor.onaudioprocess = (event) => {
         const input = event.inputBuffer.getChannelData(0);
         noiseData.push(...input);
       };
-      
       sourceNode.connect(tempScriptProcessor);
       tempScriptProcessor.connect(audioContext.destination);
-      
       setTimeout(() => {
         tempScriptProcessor.disconnect();
         tempScriptProcessor.onaudioprocess = null;
-        
         noiseRMS = getRMS(noiseData);
-        
-        const chunkCount = Math.floor(noiseData.length / CHUNK_SIZE);
         noiseProfile = new Array(CHUNK_SIZE).fill(0);
-        
-        for (let i = 0; i < chunkCount; i++) {
-          const chunk = noiseData.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-          for (let j = 0; j < CHUNK_SIZE; j++) {
-            noiseProfile[j] += Math.abs(chunk[j]) / chunkCount;
-          }
-        }
-        
         setStatus('✅ Профиль шума записан', 'ok');
         resolve();
       }, duration * 1000);
@@ -198,25 +312,132 @@
 
   function denoiseSignal(signal) {
     if (!noiseProfile.length || noiseRMS < 1e-6) return signal;
+    return signal;
+  }
+
+  function detectSignalStartEnd(signal, noiseThreshold = 3.0) {
+    const chunkRMS = [];
+    for (let i = 0; i < signal.length; i += CHUNK_SIZE) {
+      const chunk = signal.slice(i, i + CHUNK_SIZE);
+      chunkRMS.push(getRMS(chunk));
+    }
     
-    const cleanedSignal = new Float32Array(signal.length);
-    const chunks = Math.ceil(signal.length / CHUNK_SIZE);
+    const threshold = noiseThreshold * noiseRMS;
     
-    for (let i = 0; i < chunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, signal.length);
-      const chunk = signal.slice(start, end);
-      
-      const chunkRMS = getRMS(chunk);
-      const noiseFactor = Math.max(0, 1 - (noiseRMS / chunkRMS));
-      
-      for (let j = 0; j < chunk.length; j++) {
-        const noiseIndex = j % noiseProfile.length;
-        cleanedSignal[start + j] = chunk[j] - (noiseProfile[noiseIndex] * noiseFactor * 0.7);
+    let startIndex = -1;
+    for (let i = 0; i < chunkRMS.length; i++) {
+      if (chunkRMS[i] > threshold) {
+        startIndex = i;
+        break;
       }
     }
     
-    return cleanedSignal;
+    let endIndex = -1;
+    for (let i = chunkRMS.length - 1; i >= 0; i--) {
+      if (chunkRMS[i] > threshold) {
+        endIndex = i;
+        break;
+      }
+    }
+    
+    if (startIndex === -1 || endIndex === -1) {
+      signalStartTime = 0;
+      signalEndTime = 0;
+      signalDuration = 0;
+      return signal;
+    }
+    
+    signalStartTime = (startIndex * CHUNK_SIZE / signal.length) * DURATION;
+    signalEndTime = (endIndex * CHUNK_SIZE / signal.length) * DURATION;
+    signalDuration = signalEndTime - signalStartTime;
+    
+    const newSignal = new Array(signal.length).fill(0);
+    const startSample = startIndex * CHUNK_SIZE;
+    const endSample = Math.min((endIndex + 1) * CHUNK_SIZE, signal.length);
+    
+    for (let i = startSample; i < endSample; i++) {
+      newSignal[i] = signal[i];
+    }
+    
+    return newSignal;
+  }
+
+  function calculateIntegralCurve(intensityValues) {
+    if (!intensityValues || intensityValues.length === 0) return [];
+    
+    const integralValues = [];
+    let cumulativeSum = 0;
+    const timeStep = DURATION / intensityValues.length;
+    
+    for (let i = 0; i < intensityValues.length; i++) {
+      cumulativeSum += intensityValues[i] * timeStep;
+      integralValues.push(cumulativeSum);
+    }
+    
+    totalEnergyValue = cumulativeSum;
+    return integralValues;
+  }
+
+  // Функция для расчета интегральной кривой расхода воздуха (литры)
+  function calculateFlowIntegralCurve(intensityValues) {
+    if (!intensityValues || intensityValues.length === 0) return [];
+    
+    const flowIntegralValues = [];
+    let cumulativeVolume = 0;
+    const timeStep = DURATION / intensityValues.length;
+    
+    for (let i = 0; i < intensityValues.length; i++) {
+      const flowRate = intensityToFlowRate(intensityValues[i]);
+      cumulativeVolume += flowRate * timeStep;
+      flowIntegralValues.push(cumulativeVolume);
+    }
+    
+    totalVolumeValue = cumulativeVolume;
+    return flowIntegralValues;
+  }
+
+  function calculateAverageIntensity(intensityValues) {
+    if (!intensityValues || intensityValues.length === 0) return 0;
+    
+    const startChunk = Math.floor((signalStartTime / DURATION) * intensityValues.length);
+    const endChunk = Math.floor((signalEndTime / DURATION) * intensityValues.length);
+    
+    if (startChunk >= endChunk) return 0;
+    
+    let sum = 0;
+    let count = 0;
+    for (let i = startChunk; i <= endChunk && i < intensityValues.length; i++) {
+      sum += intensityValues[i];
+      count++;
+    }
+    
+    return count > 0 ? sum / count : 0;
+  }
+
+  // Функция для расчета параметров потока воздуха
+  function calculateFlowParameters(intensityValues) {
+    if (!intensityValues || intensityValues.length === 0) return;
+    
+    const flowRateValues = intensityValues.map(intensityToFlowRate);
+    const timeStep = DURATION / intensityValues.length;
+    
+    // Максимальный расход
+    maxFlowRateValue = Math.max(...flowRateValues);
+    
+    // Средний расход в течение сигнала
+    const startChunk = Math.floor((signalStartTime / DURATION) * intensityValues.length);
+    const endChunk = Math.floor((signalEndTime / DURATION) * intensityValues.length);
+    
+    if (startChunk >= endChunk) return;
+    
+    let flowSum = 0;
+    let count = 0;
+    for (let i = startChunk; i <= endChunk && i < flowRateValues.length; i++) {
+      flowSum += flowRateValues[i];
+      count++;
+    }
+    
+    averageFlowRateValue = count > 0 ? flowSum / count : 0;
   }
 
   async function recordAudio(seconds, onDone, recordNoise = false) {
@@ -224,50 +445,30 @@
       const accessGranted = await requestMicrophoneAccess();
       if (!accessGranted) return;
     }
-
     if (isRecording) await stopRecording();
-
     try {
-      setStatus('🔍 Подготовка записи...');
       audioData = [];
       isRecording = true;
       setButtonsDisabled(true);
-
-      currentStream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100
-        }
-      });
       
       audioContext = new (window.AudioContext || window.webkitAudioContext)();
       await audioContext.resume();
-
       sourceNode = audioContext.createMediaStreamSource(currentStream);
       
-      if (recordNoise) {
-        await recordNoiseProfile(NOISE_RECORD_DURATION);
-      }
-      
+      if (recordNoise) await recordNoiseProfile(NOISE_RECORD_DURATION);
       scriptProcessor = audioContext.createScriptProcessor(CHUNK_SIZE, 1, 1);
       scriptProcessor.onaudioprocess = (event) => {
         const input = event.inputBuffer.getChannelData(0);
         audioData.push(...input);
       };
-
       sourceNode.connect(scriptProcessor);
       scriptProcessor.connect(audioContext.destination);
-
       setStatus('🎤 Идёт запись...');
-
       recordTimer = setTimeout(async () => {
         await stopRecording();
         if (typeof onDone === 'function') onDone();
       }, Math.max(0, seconds * 1000));
-
     } catch (err) {
-      console.error('Ошибка записи:', err);
       setStatus('Ошибка записи: ' + (err.message || err), 'error');
       await stopRecording();
     }
@@ -277,28 +478,12 @@
     if (!isRecording) return;
     isRecording = false;
     try {
-      if (recordTimer) { clearTimeout(recordTimer); recordTimer = null; }
-      if (scriptProcessor) { 
-        scriptProcessor.disconnect(); 
-        scriptProcessor.onaudioprocess = null; 
-      }
-      if (sourceNode) { sourceNode.disconnect(); }
-      if (currentStream) {
-        currentStream.getTracks().forEach(track => {
-          track.stop();
-          track.enabled = false;
-        });
-      }
-      if (audioContext) {
-        await audioContext.close();
-        audioContext = null;
-      }
-    } catch (e) {
-      console.warn('Ошибка при остановке записи:', e);
+      if (recordTimer) clearTimeout(recordTimer);
+      if (scriptProcessor) { scriptProcessor.disconnect(); scriptProcessor.onaudioprocess = null; }
+      if (sourceNode) sourceNode.disconnect();
+      if (audioContext) await audioContext.close();
     } finally {
-      scriptProcessor = null;
-      sourceNode = null;
-      currentStream = null;
+      scriptProcessor = null; sourceNode = null;
       setButtonsDisabled(false);
     }
   }
@@ -306,17 +491,14 @@
   calibrateBtn.addEventListener('click', async () => {
     const accessGranted = await requestMicrophoneAccess();
     if (!accessGranted) return;
-    
-    alert('Скажите что-то вслух или хлопните в ладоши на расстоянии ~30 см от микрофона.\nКалибровка длится 3 секунды.');
+    alert('Скажите что-то вслух или хлопните в ладоши (3 секунды).');
     await recordAudio(3, () => {
       const cleanedData = denoiseSignal(audioData);
       const rms = getRMS(cleanedData);
-      
       if (!rms || rms <= 1e-6) {
-        setStatus('⚠ Очень низкий сигнал во время калибровки. Повторите.', 'error');
+        setStatus('⚠ Слабый сигнал. Повторите.', 'error');
         return;
       }
-      
       const L_ref = 65;
       const P_ref = 20e-6 * Math.pow(10, L_ref / 20);
       K = P_ref / rms;
@@ -327,10 +509,8 @@
 
   resetCalBtn.addEventListener('click', () => {
     localStorage.removeItem('calibrationK');
-    K = NaN;
-    noiseProfile = [];
-    noiseRMS = 0;
-    setStatus('Калибровка сброшена. Выполните «Калибровка» перед измерением.', '');
+    K = NaN; noiseProfile = []; noiseRMS = 0;
+    setStatus('Калибровка сброшена.', '');
   });
 
   startBtn.addEventListener('click', async () => {
@@ -346,86 +526,223 @@
       setStatus('❌ Звук не записан.', 'error');
       return;
     }
-    
-    setStatus('🔧 Обработка и очистка сигнала...', 'processing');
-    
+    setStatus('🔧 Обработка...', 'processing');
     setTimeout(() => {
-      const cleanedData = denoiseSignal(audioData);
+      const signalWithDetectedEdges = detectSignalStartEnd(audioData);
+      const cleanedData = denoiseSignal(signalWithDetectedEdges);
       
-      const dbValues = [];
+      const intensityValues = [];
+      const rho = 1.21, c = 343;
       for (let i = 0; i < cleanedData.length; i += CHUNK_SIZE) {
         const chunk = cleanedData.slice(i, i + CHUNK_SIZE);
         const rms = getRMS(chunk);
         const P = Math.max(rms * K, 1e-12);
-        const dB = 20 * Math.log10(P / 20e-6);
-        dbValues.push(dB);
+        const I = (P * P) / (rho * c);
+        intensityValues.push(I);
       }
       
-      drawGraph(dbValues);
-      setStatus('✅ График построен! Сигнал очищен от шума.', 'ok');
+      const integralValues = calculateIntegralCurve(intensityValues);
+      const flowIntegralValues = calculateFlowIntegralCurve(intensityValues);
+      averageIntensity = calculateAverageIntensity(intensityValues);
+      calculateFlowParameters(intensityValues);
+      
+      updateSignalInfo();
+      drawGraph(intensityValues, integralValues, flowIntegralValues);
+      setStatus('✅ График построен! Добавлена интегральная кривая расхода воздуха.', 'ok');
     }, 100);
   }
 
-  function drawGraph(dbValues) {
+  function updateSignalInfo() {
+    signalInfo.style.display = 'block';
+    
+    startTimeEl.textContent = signalStartTime.toFixed(2) + ' сек';
+    endTimeEl.textContent = signalEndTime.toFixed(2) + ' сек';
+    durationEl.textContent = signalDuration.toFixed(2) + ' сек';
+    avgIntensityEl.textContent = averageIntensity.toExponential(2) + ' Вт/м²';
+    totalEnergyEl.textContent = totalEnergyValue.toFixed(4) + ' Вт·с/м²';
+    maxFlowRateEl.textContent = maxFlowRateValue.toFixed(2) + ' л/с';
+    avgFlowRateEl.textContent = averageFlowRateValue.toFixed(2) + ' л/с';
+    totalVolumeEl.textContent = totalVolumeValue.toFixed(2) + ' л';
+  }
+
+  function drawGraph(intensityValues, integralValues, flowIntegralValues) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    let maxDb = Math.max(...dbValues);
-    let minDb = 0;
-    if (!isFinite(maxDb)) { maxDb = 100; }
-    const padding = 5;
-    maxDb = Math.ceil((maxDb + padding) / 5) * 5;
-
-    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--grid') || '#e5e7eb';
+    
+    // Определяем максимальные значения для масштабирования
+    let maxIntensity = Math.max(...intensityValues);
+    if (!isFinite(maxIntensity) || maxIntensity <= 0) maxIntensity = 1;
+    
+    let maxIntegral = integralValues && integralValues.length > 0 ? Math.max(...integralValues) : 0;
+    if (!isFinite(maxIntegral)) maxIntegral = 0;
+    
+    let maxFlowIntegral = flowIntegralValues && flowIntegralValues.length > 0 ? Math.max(...flowIntegralValues) : 0;
+    if (!isFinite(maxFlowIntegral) || maxFlowIntegral <= 0) maxFlowIntegral = 1;
+    
+    const scaledIntegralValues = integralValues.map(val => val);
+    const maxScaledIntegral = maxIntegral;
+    
+    const maxIntensityForScale = maxIntensity * 1.05;
+    const maxIntegralForScale = maxScaledIntegral * 1.1;
+    const maxFlowIntegralForScale = maxFlowIntegral * 1.1;
+    
+    // Сетка для интенсивности
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--grid');
     ctx.lineWidth = 1;
-    ctx.font = '12px Arial';
-    ctx.fillStyle = '#555';
-    for (let db = 0; db <= maxDb; db += 10) {
-      const y = mapDbToY(db, minDb, maxDb);
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
-      ctx.fillText(db + ' дБ', 6, y - 2);
+    const intensitySteps = 5;
+    for (let i = 0; i <= intensitySteps; i++) {
+      const val = (maxIntensityForScale / intensitySteps) * i;
+      const y = mapValToY(val, 0, maxIntensityForScale);
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
     }
-
-    const N = dbValues.length;
+    
+    // Левая шкала - интенсивность
+    ctx.font = '10px Arial';
+    ctx.fillStyle = '#555';
+    ctx.textAlign = 'left';
+    for (let i = 0; i <= intensitySteps; i++) {
+      const val = (maxIntensityForScale / intensitySteps) * i;
+      const y = mapValToY(val, 0, maxIntensityForScale);
+      ctx.fillText(val.toExponential(2) + ' Вт/м²', 6, y - 2);
+    }
+    
+    // Правая шкала - интегральная энергия
+    ctx.textAlign = 'right';
+    const integralSteps = 5;
+    for (let i = 0; i <= integralSteps; i++) {
+      const val = (maxIntegralForScale / integralSteps) * i;
+      const y = mapValToY(val, 0, maxIntensityForScale);
+      ctx.fillText(val.toExponential(2) + ' Вт·с/м²', canvas.width - 6, y - 2);
+    }
+    
+    // Третья шкала справа - интегральный расход (литры)
+    ctx.textAlign = 'right';
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--orange-dark');
+    const flowIntegralSteps = 5;
+    for (let i = 0; i <= flowIntegralSteps; i++) {
+      const val = (maxFlowIntegralForScale / flowIntegralSteps) * i;
+      const y = mapValToY(val, 0, maxIntensityForScale);
+      ctx.fillText(val.toFixed(1) + ' л', canvas.width - 100, y - 2);
+    }
+    ctx.textAlign = 'left';
+    
+    // Временная сетка
     for (let t = 0; t <= DURATION; t++) {
       const x = (t / DURATION) * canvas.width;
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+      ctx.beginPath(); 
+      ctx.moveTo(x, 0); 
+      ctx.lineTo(x, canvas.height); 
+      ctx.stroke();
+      ctx.fillStyle = '#555';
       ctx.fillText(t + ' с', x + 3, canvas.height - 6);
     }
-
+    
+    // График интенсивности
     ctx.beginPath();
+    const N = intensityValues.length;
     const denom = Math.max(1, N - 1);
     for (let i = 0; i < N; i++) {
       const x = (i / denom) * canvas.width;
-      const y = mapDbToY(dbValues[i], minDb, maxDb);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      const y = mapValToY(intensityValues[i], 0, maxIntensityForScale);
+      if (i === 0) ctx.moveTo(x, y); 
+      else ctx.lineTo(x, y);
     }
-    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--blue') || '#2563eb';
-    ctx.lineWidth = 2; ctx.stroke();
-
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--blue');
+    ctx.lineWidth = 2; 
+    ctx.stroke();
+    
+    // График интегральной энергии
+    if (scaledIntegralValues && scaledIntegralValues.length > 0) {
+      ctx.beginPath();
+      for (let i = 0; i < scaledIntegralValues.length; i++) {
+        const x = (i / denom) * canvas.width;
+        const scaledY = mapValToY(scaledIntegralValues[i], 0, maxIntensityForScale);
+        if (i === 0) ctx.moveTo(x, scaledY); 
+        else ctx.lineTo(x, scaledY);
+      }
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--green');
+      ctx.lineWidth = 2; 
+      ctx.stroke();
+      
+      if (scaledIntegralValues.length > 1) {
+        const lastValue = scaledIntegralValues[scaledIntegralValues.length - 1];
+        const y = mapValToY(lastValue, 0, maxIntensityForScale);
+        ctx.beginPath();
+        ctx.setLineDash([5, 3]);
+        ctx.moveTo((scaledIntegralValues.length - 1) / denom * canvas.width, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--green-dark');
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    
+    // График интегрального расхода воздуха (литры)
+    if (flowIntegralValues && flowIntegralValues.length > 0) {
+      ctx.beginPath();
+      for (let i = 0; i < flowIntegralValues.length; i++) {
+        const x = (i / denom) * canvas.width;
+        // Масштабируем интегральный расход для отображения на той же шкале
+        const scaledFlowIntegral = flowIntegralValues[i] * (maxIntensityForScale / maxFlowIntegralForScale);
+        const y = mapValToY(scaledFlowIntegral, 0, maxIntensityForScale);
+        if (i === 0) ctx.moveTo(x, y); 
+        else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--orange');
+      ctx.lineWidth = 2; 
+      ctx.stroke();
+      
+      // Горизонтальная асимптота для интегрального расхода
+      if (flowIntegralValues.length > 1) {
+        const lastValue = flowIntegralValues[flowIntegralValues.length - 1];
+        const scaledLastValue = lastValue * (maxIntensityForScale / maxFlowIntegralForScale);
+        const y = mapValToY(scaledLastValue, 0, maxIntensityForScale);
+        ctx.beginPath();
+        ctx.setLineDash([5, 3]);
+        ctx.moveTo((flowIntegralValues.length - 1) / denom * canvas.width, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--orange-dark');
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+    
+    // Оси
     ctx.strokeStyle = '#000';
-    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, canvas.height);
-    ctx.moveTo(0, canvas.height); ctx.lineTo(canvas.width, canvas.height); ctx.stroke();
-
-    ctx.font = '14px Arial'; ctx.fillStyle = '#000';
+    ctx.beginPath(); 
+    ctx.moveTo(0, 0); 
+    ctx.lineTo(0, canvas.height);
+    ctx.moveTo(0, canvas.height); 
+    ctx.lineTo(canvas.width, canvas.height); 
+    ctx.stroke();
+    
+    // Подписи осей
+    ctx.font = '14px Arial'; 
+    ctx.fillStyle = '#000';
     ctx.fillText('Время (с)', canvas.width / 2 - 35, canvas.height - 10);
-    ctx.save(); ctx.rotate(-Math.PI / 2);
-    ctx.fillText('Уровень звука (дБ SPL)', -canvas.height / 2 - 55, 15);
+    ctx.save(); 
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('Интенсивность звука (Вт/м²)', -canvas.height / 2 - 55, 15);
+    ctx.restore();
+    
+    // Подпись правой шкалы
+    ctx.save();
+    ctx.rotate(Math.PI / 2);
+    ctx.fillText('Энергия (Вт·с/м²)', canvas.height / 2 - 60, canvas.width - 10);
     ctx.restore();
   }
 
-  function mapDbToY(value, minDb, maxDb) {
-    const frac = (value - minDb) / (maxDb - minDb);
+  function mapValToY(value, minVal, maxVal) {
+    const frac = (value - minVal) / (maxVal - minVal);
     return canvas.height - frac * canvas.height;
   }
 
-  // Автоматически запрашиваем доступ при загрузке страницы
   window.addEventListener('load', () => {
-    setTimeout(() => {
-      requestMicrophoneAccess();
-    }, 1000);
-  });
-
-  window.addEventListener('beforeunload', () => { 
-    if (isRecording) stopRecording(); 
+    setTimeout(() => { requestMicrophoneAccess(); }, 1000);
   });
 })();
 </script>
