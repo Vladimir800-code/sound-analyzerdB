@@ -130,7 +130,7 @@
   
   <div class="controls">
     <button id="calibrateBtn">📏 Калибровка</button>
-    <button id="startBtn">🎙 Начать запись (10 с)</button>
+    <button id="startBtn">🎙 Начать запись (20 с)</button>
     <button id="resetCalBtn" title="Удалить сохранённую калибровку">♻️ Сброс калибровки</button>
   </div>
   <div id="status" aria-live="polite"></div>
@@ -211,7 +211,7 @@
   const avgFlowRateEl = document.getElementById('avgFlowRate');
   const totalVolumeEl = document.getElementById('totalVolume');
 
-  const DURATION = 10;
+  const DURATION = 20; // Изменено с 10 на 20 секунд
   const CHUNK_SIZE = 1024;
   const NOISE_RECORD_DURATION = 2;
   const INTEGRAL_SCALE = 1;
